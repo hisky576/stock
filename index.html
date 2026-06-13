@@ -93,6 +93,9 @@
   .price-input{font-family:var(--mono);font-size:14px;font-weight:600;text-align:right;width:88px;padding:6px 9px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--ink);transition:.15s}
   .price-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
   .price-input.auto{background:var(--accent-soft);border-color:#bcd4ff}
+  .mini-sell{font-family:inherit;font-size:12.5px;font-weight:700;color:var(--sell);background:var(--sell-soft);border:1px solid #f0d9b5;padding:6px 13px;border-radius:8px;cursor:pointer;transition:.15s;white-space:nowrap}
+  .mini-sell:hover{background:#ffe9cc;border-color:var(--sell)}
+  .mini-sell:active{transform:translateY(1px)}
 
   .row-actions{display:flex;gap:4px;justify-content:flex-end}
   .icon-btn{width:30px;height:30px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--ink-3);cursor:pointer;display:grid;place-items:center;transition:.15s}
@@ -250,7 +253,7 @@
       <table id="holdTbl">
         <thead><tr>
           <th>代號 / 名稱</th><th>股數</th><th>均價(含費)</th><th>現價</th>
-          <th>成本</th><th>市值</th><th>未實現損益</th><th>報酬率</th>
+          <th>成本</th><th>市值</th><th>未實現損益</th><th>報酬率</th><th></th>
         </tr></thead>
         <tbody id="holdBody"></tbody>
       </table>
@@ -284,7 +287,7 @@
   </section>
 
   <footer class="note">
-    <span id="updateTime">資料儲存在本機瀏覽器，重新整理不會遺失。</span><br>
+    <span id="updateTime">資料儲存在本機瀏覽器，重新整理不會遺失。</span> <span id="listStatus"></span><br>
     現價可<b>手動輸入</b>，或點「抓取現價」嘗試從 <b>證交所 TWSE 即時行情</b> 取得（自動判別上市/上櫃）。手續費預設 0.1425%、賣出交易稅 0.3%，皆可自行修改。
   </footer>
 </div>
@@ -381,16 +384,19 @@ window.STOCKS = {
 };
 
 /* 反向：名稱 → 代號（含去除 -KY / * 等符號的模糊比對用） */
-window.NAME2CODE = (function(){
+window.rebuildName2Code = function(){
   const m = {};
   for(const code in window.STOCKS){
     const nm = window.STOCKS[code][0];
-    m[nm] = code;
+    if(!nm) continue;
+    if(!m[nm]) m[nm] = code;
     const clean = nm.replace(/-KY|\*/g,'');
-    if(clean!==nm) m[clean] = code;
+    if(clean!==nm && !m[clean]) m[clean] = code;
   }
+  window.NAME2CODE = m;
   return m;
-})();
+};
+window.rebuildName2Code();
 
 window.stockName = code => (window.STOCKS[code] ? window.STOCKS[code][0] : '');
 window.stockMarket = code => (window.STOCKS[code] && window.STOCKS[code][1]==='O') ? 'otc' : 'tse';
@@ -512,6 +518,7 @@ function renderHoldings(pos, codes){
       <td>${r.has?fmtMoney(r.mv):'—'}</td>
       <td class="plcell ${r.has?k:'flat'}">${r.has?signMoney(r.pl):'—'}</td>
       <td class="rrcell">${r.rr==null?'—':`<span class="pill bg-${k} ${k}">${sgn(r.rr)}${fmt(r.rr,2)}%</span>`}</td>
+      <td><button class="mini-sell" onclick="openSellFor('${r.code}')">賣出</button></td>
     </tr>`;
   }).join('');
 
@@ -660,6 +667,28 @@ function pickStock(s){
 const overlay=document.getElementById('overlay');
 function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
 
+function openSellFor(code){
+  const pos=buildHoldings(); const p=pos[code]; if(!p) return;
+  editingId=null; setType('sell');
+  curStock={code,name:p.name||window.stockName(code),market:p.market||window.stockMarket(code)};
+  document.getElementById('modalTitle').textContent='賣出 / 平倉';
+  document.getElementById('modalSub').textContent='賣出持股 '+code+' '+(curStock.name||'')+'（目前持有 '+fmt(p.shares)+' 股）';
+  document.getElementById('fQuery').value = curStock.name?`${code} ${curStock.name}`:code;
+  document.getElementById('fDate').value=todayStr();
+  document.getElementById('fShares').value=p.shares;
+  const cp=priceOf(code);
+  document.getElementById('fPrice').value = cp!=null?cp:'';
+  document.getElementById('fFee').value=''; document.getElementById('fFee').dataset.touched='';
+  document.getElementById('fTax').value=''; document.getElementById('fTax').dataset.touched='';
+  document.getElementById('qHint').innerHTML=`✓ ${code} ${curStock.name||''} · <b>${curStock.market==='otc'?'上櫃 OTC':'上市 TSE'}</b>`;
+  document.getElementById('qHint').style.color='var(--down)';
+  document.getElementById('errMsg').textContent='';
+  acList.classList.remove('show');
+  updateCalc();
+  overlay.classList.add('show');
+  setTimeout(()=>{ const el=document.getElementById('fPrice'); el.focus(); el.select(); },50);
+}
+
 function openAdd(type='buy'){
   editingId=null; setType(type);
   curStock={code:'',name:'',market:'tse'};
@@ -748,7 +777,8 @@ fQuery.addEventListener('input',e=>{
   const hint=document.getElementById('qHint');
   if(r&&!r.unknown){ hint.innerHTML=`✓ ${r.code} ${r.name} · <b>${r.market==='otc'?'上櫃 OTC':'上市 TSE'}</b>`; hint.style.color='var(--down)'; }
   else if(r&&r.unknown){ hint.innerHTML=`代號 ${r.code} · 市場將於抓價時自動判別`; hint.style.color='var(--ink-3)'; }
-  else { hint.textContent='可直接打代號或中文名稱，自動帶出另一個並判別市場'; hint.style.color=''; }
+  else if(/^\d{4,6}[A-Z]?$/.test(v)){ hint.innerHTML=`找不到代號 ${v}，可<b>直接新增</b>（抓價時自動帶名稱/市場）`; hint.style.color='var(--sell)'; }
+  else { hint.textContent=v?'查無此股票，請輸入代號（數字）或正確名稱':'可直接打代號或中文名稱，自動帶出另一個並判別市場'; hint.style.color=v?'var(--up)':''; }
 });
 fQuery.addEventListener('keydown',e=>{
   if(!acList.classList.contains('show')) return;
@@ -914,6 +944,77 @@ if(txs.length===0 && !localStorage.getItem('tw_stock_seeded_v2')){
 }
 
 render();
+
+/* ===================== 載入完整台股清單（上市+上櫃），快取於本機 ===================== */
+const LIST_KEY='tw_stock_list_v1';
+const LIST_TTL=7*24*3600*1000; // 7 天
+
+function mergeStockList(map){
+  let added=0;
+  for(const code in map){
+    if(!window.STOCKS[code]){ window.STOCKS[code]=map[code]; added++; }
+  }
+  if(added>0) window.rebuildName2Code();
+  return added;
+}
+async function fetchJsonSmart(url){
+  // 先直連，失敗再走代理
+  try{ const r=await fetch(url); if(r.ok) return await r.json(); }catch(e){}
+  const data=await fetchViaProxy(url);
+  return data;
+}
+function pick(obj,reArr){
+  for(const re of reArr){ for(const k in obj){ if(re.test(k)) return obj[k]; } }
+  return '';
+}
+async function loadFullStockList(){
+  // 1) 先用快取
+  try{
+    const c=JSON.parse(localStorage.getItem(LIST_KEY));
+    if(c && c.map && (Date.now()-c.ts)<LIST_TTL){
+      const n=mergeStockList(c.map);
+      if(n>0) render();
+      setListStatus(Object.keys(window.STOCKS).length);
+      return;
+    }
+  }catch(e){}
+
+  // 2) 線上抓取（上市 + 上櫃）
+  const map={};
+  try{
+    const tse=await fetchJsonSmart('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL');
+    if(Array.isArray(tse)) tse.forEach(it=>{
+      const code=String(pick(it,[/^code$/i,/code/i])).trim();
+      const name=String(pick(it,[/^name$/i,/name/i])).trim();
+      if(/^\d{4,6}[A-Z]?$/.test(code)&&name) map[code]=[name];
+    });
+  }catch(e){}
+  try{
+    const otc=await fetchJsonSmart('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes');
+    if(Array.isArray(otc)) otc.forEach(it=>{
+      const code=String(pick(it,[/companycode/i,/^code$/i,/code/i])).trim();
+      const name=String(pick(it,[/companyname/i,/^name$/i,/name/i])).trim();
+      if(/^\d{4,6}[A-Z]?$/.test(code)&&name) map[code]=[name,'O'];
+    });
+  }catch(e){}
+
+  const count=Object.keys(map).length;
+  if(count>50){
+    try{ localStorage.setItem(LIST_KEY, JSON.stringify({ts:Date.now(),map})); }catch(e){}
+    const n=mergeStockList(map);
+    if(n>0) render();
+    setListStatus(Object.keys(window.STOCKS).length);
+  } else {
+    setListStatus(Object.keys(window.STOCKS).length, true);
+  }
+}
+function setListStatus(total, failed){
+  const el=document.getElementById('listStatus');
+  if(!el) return;
+  if(failed){ el.textContent='（完整清單載入失敗，目前可用常見 '+total+' 檔；數字代號仍可直接新增）'; }
+  else { el.textContent='已載入 '+total.toLocaleString()+' 檔台股可查詢。'; }
+}
+loadFullStockList();
 </script>
 </body>
 </html>
